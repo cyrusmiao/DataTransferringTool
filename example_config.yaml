@@ -1,0 +1,17 @@
+target_file: "target.xlsx"
+output_file: "output.xlsx"
+conflict_resolution: "keep_original" # 'keep_original', 'overwrite', 'manual'
+
+sources:
+  - file_path: "source1.csv"
+    reference_column:
+      A: C  # Source column A maps to Target column C
+    mapping:
+      B: D  # Source column B maps to Target column D
+      E: F  # Source column E maps to Target column F
+
+  - file_path: "source2.xlsx"
+    reference_column:
+      A: A  # Adjust according to your columns
+    mapping:
+      B: C
