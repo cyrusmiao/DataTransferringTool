@@ -37,6 +37,18 @@ target_sheet: "Summary"
 # The output file where the merged data will be saved
 output_file: "output.xlsx"
 
+# Whether to generate transfer_report.xlsx
+# Disabled by default; set to true explicitly when needed
+generate_transfer_report: false
+
+# Whether to generate reference_report.md
+# Disabled by default; set to true explicitly when needed
+generate_reference_report: false
+
+# Whether to color conflicting cells in the output Excel file by conflict count
+# Disabled by default; only works for xls / xlsx outputs
+highlight_conflict_cells: false
+
 # How to handle conflicts when a target cell already has data
 # Options: 
 #   - keep_original: Keep the existing data in the target
@@ -71,6 +83,20 @@ sources:
 - If `target_sheet` or `sheet_name` is omitted, the first Excel sheet is used.
 - When the target file is Excel, the output keeps the other sheets from the target workbook and only updates the selected target sheet.
 - If the source and target are the same Excel file, you can transfer data across different tabs by using different `sheet_name` and `target_sheet` values.
+- `generate_transfer_report` defaults to `false`; `transfer_report.xlsx` is generated only when it is explicitly set to `true`.
+- `generate_reference_report` defaults to `false`; `reference_report.md` is generated only when it is explicitly set to `true`.
+- `highlight_conflict_cells` defaults to `false`; it colors conflicting cells only for `xls` / `xlsx` outputs, and is ignored for `csv`.
+- If one source column needs to be written to multiple target columns, the recommended YAML form is a list so the order is preserved explicitly:
+
+```yaml
+mapping:
+  - E: AZ
+  - E: BA
+  - F: BB
+```
+
+- The example above writes source column `E` to both target columns `AZ` and `BA`, then writes source column `F` to target column `BB`.
+- The current version also accepts duplicate-key mapping syntax, but the list form is clearer and better represents one-to-many mappings in YAML.
 
 ## Usage
 
@@ -123,11 +149,19 @@ Once the build is complete, you will find the executable file inside the `dist/`
 
 ## Report
 
-After execution, the tool generates a `transfer_report.xlsx` containing:
-- Conflict resolution method used (e.g., `transferred`, `conflict_kept_original`, `conflict_overwritten`, `skipped_not_in_target`).
+If `generate_transfer_report` is set to `true`, the tool generates a `transfer_report.xlsx` containing:
+- Conflict resolution method used (e.g., `transferred`, `identical_skipped`, `conflict_kept_original`, `conflict_overwritten`, `skipped_not_in_target`).
 - Source and Target file paths.
 - Source and Target sheet names.
 - Reference values used to match the rows.
 - The columns affected.
 - Original data vs New Data.
 - Similarity Score between the old and new data (if a conflict occurred).
+- When the old and new values are semantically equal but formatted differently, such as `0` and `0.0`, the tool keeps the target value and records the row as `identical_skipped`.
+
+If `generate_reference_report` is set to `true`, the tool also generates a `reference_report.md` file grouped by source file, listing all `reference_value` entries that were not skipped as `skipped_not_in_target`.
+
+If `highlight_conflict_cells` is set to `true` and the output format is `xls` or `xlsx`, the tool colors each conflicting target cell by the number of conflicts it received:
+- 1 conflict: yellow
+- 2 conflicts: orange
+- 3 or more conflicts: red

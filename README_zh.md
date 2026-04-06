@@ -37,6 +37,18 @@ target_sheet: "汇总"
 # 最终生成的新文件路径（不会修改原文件）
 output_file: "output.xlsx"
 
+# 是否生成 transfer_report.xlsx
+# 默认关闭；如需生成请显式设置为 true
+generate_transfer_report: false
+
+# 是否生成 reference_report.md
+# 默认关闭；如需生成请显式设置为 true
+generate_reference_report: false
+
+# 是否根据冲突次数给输出 Excel 中发生冲突的单元格着色
+# 默认关闭；仅对 xls / xlsx 输出生效
+highlight_conflict_cells: false
+
 # 冲突处理策略（当目标单元格已有数据时如何处理）
 # 选项: 
 #   - keep_original: 优先保留目标文件中已有的（或最先被写入的）数据
@@ -71,6 +83,20 @@ sources:
 - 未配置 `target_sheet` 或 `sheet_name` 时，Excel 默认使用第一个工作表。
 - 当目标文件是 Excel 时，输出文件会保留目标工作簿中的其他工作表，只更新指定的目标工作表。
 - 如果来源文件与目标文件是同一个 Excel，也可以通过不同的 `sheet_name` / `target_sheet` 在不同 tab 之间迁移数据。
+- `generate_transfer_report` 默认是 `false`，只有显式设置为 `true` 时才会生成 `transfer_report.xlsx`。
+- `generate_reference_report` 默认是 `false`，只有显式设置为 `true` 时才会生成 `reference_report.md`。
+- `highlight_conflict_cells` 默认是 `false`，只有显式设置为 `true` 时才会给输出的 `xls` / `xlsx` 文件中的冲突单元格着色；`csv` 不支持此功能。
+- 如果一个来源列需要写入多个目标列，推荐使用 YAML 列表写法来显式保留顺序，例如：
+
+```yaml
+mapping:
+  - E: AZ
+  - E: BA
+  - F: BB
+```
+
+- 以上写法表示把来源 `E` 列同时写入目标 `AZ` 和 `BA` 两列，再把来源 `F` 列写入目标 `BB` 列。
+- 当前版本也兼容重复键写法，但列表写法更清晰，也更符合 YAML 对“一对多映射”的表达方式。
 
 ## 使用方法
 
@@ -100,11 +126,20 @@ uv run python main.py --third-party-notices
 
 ## 执行报告
 
-执行完成后，工具会自动在当前目录下生成一份名为 `transfer_report.xlsx` 的 Excel 报告。报告包含了以下重要信息：
-- 冲突处理结果（例如：`transferred` 已转移, `conflict_kept_original` 冲突-保留原数据, `conflict_overwritten` 冲突-覆盖, `skipped_not_in_target` 找不到对应行被跳过）。
+执行完成后，如果 YAML 中将 `generate_transfer_report` 设置为 `true`，工具会在当前目录下生成一份名为 `transfer_report.xlsx` 的 Excel 报告。报告包含了以下重要信息：
+- 冲突处理结果（例如：`transferred` 已转移, `identical_skipped` 数值或文本等价因此跳过, `conflict_kept_original` 冲突-保留原数据, `conflict_overwritten` 冲突-覆盖, `skipped_not_in_target` 找不到对应行被跳过）。
 - 涉及的源文件和目标文件路径。
 - 涉及的源工作表和目标工作表。
 - 被匹配到的参照值。
 - 操作的具体目标列。
 - 原数据和新数据的对比。
 - 原数据与新数据的**文本相似度分数 (Similarity Score)**（当发生冲突时生成，基于模糊匹配算法，帮助您判断是否属于笔误或微小差异）。
+- 当原数据与新数据只是数值表示形式不同但语义相等时（例如 `0` 和 `0.0`），工具不会覆盖目标值，而是记录为 `identical_skipped`。
+
+如果 YAML 中将 `generate_reference_report` 设置为 `true`，工具还会在当前目录下生成一份名为 `reference_report.md` 的文本报告。该报告会按来源文件分组，列出所有**没有被 `skipped_not_in_target` 跳过**的 `reference_value`。
+
+如果 YAML 中将 `highlight_conflict_cells` 设置为 `true`，并且输出格式为 `xls` 或 `xlsx`，工具会根据同一个目标单元格发生冲突的次数着色：
+- 第 1 次冲突：黄色
+- 第 2 次冲突：橙色
+- 第 3 次及以上：红色
+- 当原数据与新数据只是数值表示形式不同但语义相等时（例如 `0` 和 `0.0`），工具不会覆盖目标值，而是记录为 `identical_skipped`。

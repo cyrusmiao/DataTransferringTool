@@ -67,7 +67,12 @@ class App(ctk.CTk):
             transfer = DataTransfer(config)
             transfer.run()
             self.status_label.configure(text=f"Success! Output saved to: {config.output_file}", text_color="green")
-            messagebox.showinfo("Success", f"Data transfer completed successfully!\nOutput file: {config.output_file}\nReport: transfer_report.xlsx")
+            success_message = f"Data transfer completed successfully!\nOutput file: {config.output_file}"
+            if config.generate_transfer_report:
+                success_message += "\nReport: transfer_report.xlsx"
+            if config.generate_reference_report:
+                success_message += "\nReference report: reference_report.md"
+            messagebox.showinfo("Success", success_message)
         except Exception as e:
             self.status_label.configure(text=f"Error occurred.", text_color="red")
             messagebox.showerror("Error", f"An error occurred:\n{str(e)}")

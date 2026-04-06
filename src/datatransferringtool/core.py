@@ -1,8 +1,12 @@
 import pandas as pd
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
+from datetime import date, datetime
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill
 from thefuzz import fuzz
 from typing import List, Dict, Any
+import xlwt
 from .config import TransferConfig
 
 class DataTransfer:
@@ -11,6 +15,7 @@ class DataTransfer:
         self.report = []
         self.target_workbook = None
         self.target_sheet_name = None
+        self.conflict_cell_counts = {}
         self.target_df = self._load_target_file()
         
     def _col_to_index(self, col) -> int:
@@ -89,7 +94,13 @@ class DataTransfer:
         if pd.isna(value):
             return value
         if pd.api.types.is_string_dtype(df[column].dtype):
-            return str(value)
+            if isinstance(value, str):
+                return value
+            try:
+                df[column] = df[column].astype('object')
+                return pd.to_numeric([value], errors='raise')[0]
+            except (TypeError, ValueError):
+                return str(value)
         if pd.api.types.is_numeric_dtype(df[column].dtype):
             try:
                 return pd.to_numeric([value], errors='raise')[0]
@@ -121,23 +132,118 @@ class DataTransfer:
         export_df.columns = [self._display_header(column) for column in export_df.columns]
         return export_df
 
+    def _coerce_excel_scalar(self, value):
+        if pd.isna(value):
+            return None
+        if hasattr(value, "item") and not isinstance(value, (str, bytes)):
+            try:
+                value = value.item()
+            except (ValueError, TypeError):
+                pass
+        if isinstance(value, Decimal):
+            if value == value.to_integral_value():
+                return int(value)
+            return float(value)
+        if isinstance(value, pd.Timestamp):
+            return value.to_pydatetime()
+        return value
+
+    def _highlight_conflict_cells_enabled(self, output_path: Path) -> bool:
+        return self.config.highlight_conflict_cells and output_path.suffix.lower() in ['.xls', '.xlsx']
+
+    def _build_xls_cell_style(self, conflict_count: int | None = None, is_datetime: bool = False, is_date: bool = False):
+        style = xlwt.XFStyle()
+        if is_datetime:
+            style.num_format_str = 'YYYY-MM-DD HH:MM:SS'
+        elif is_date:
+            style.num_format_str = 'YYYY-MM-DD'
+        if conflict_count:
+            pattern = xlwt.Pattern()
+            pattern.pattern = xlwt.Pattern.SOLID_PATTERN
+            if conflict_count == 1:
+                pattern.pattern_fore_colour = 5
+            elif conflict_count == 2:
+                pattern.pattern_fore_colour = 0x21
+            else:
+                pattern.pattern_fore_colour = 10
+            style.pattern = pattern
+        return style
+
+    def _get_conflict_fill(self, conflict_count: int) -> PatternFill:
+        if conflict_count == 1:
+            color = "FFFF00"
+        elif conflict_count == 2:
+            color = "FFC000"
+        else:
+            color = "FF0000"
+        return PatternFill(fill_type="solid", start_color=color, end_color=color)
+
+    def _record_conflict_cell(self, row_index: int, column_index: int):
+        key = (row_index, column_index)
+        self.conflict_cell_counts[key] = self.conflict_cell_counts.get(key, 0) + 1
+
+    def _apply_xlsx_conflict_highlights(self, path: Path, df: pd.DataFrame):
+        if not self.conflict_cell_counts:
+            return
+        workbook = load_workbook(path)
+        worksheet = workbook[self.target_sheet_name if self.target_sheet_name is not None else workbook.sheetnames[0]]
+        for (row_index, column_index), conflict_count in self.conflict_cell_counts.items():
+            excel_row = row_index + 2
+            excel_col = column_index + 1
+            worksheet.cell(row=excel_row, column=excel_col).fill = self._get_conflict_fill(conflict_count)
+        workbook.save(path)
+
+    def _save_xls_workbook(self, workbook_data: dict[str, pd.DataFrame], path: Path):
+        workbook = xlwt.Workbook(encoding='utf-8')
+        workbook.set_colour_RGB(0x21, 255, 192, 0)
+        for sheet_name, sheet_df in workbook_data.items():
+            worksheet = workbook.add_sheet(str(sheet_name)[:31])
+            for col_idx, column in enumerate(sheet_df.columns):
+                worksheet.write(0, col_idx, self._coerce_excel_scalar(column))
+            for row_idx, row in enumerate(sheet_df.itertuples(index=False, name=None), start=1):
+                for col_idx, value in enumerate(row):
+                    excel_value = self._coerce_excel_scalar(value)
+                    if excel_value is None:
+                        continue
+                    conflict_count = None
+                    if self._highlight_conflict_cells_enabled(path) and sheet_name == self.target_sheet_name:
+                        conflict_count = self.conflict_cell_counts.get((row_idx - 1, col_idx))
+                    style = self._build_xls_cell_style(
+                        conflict_count=conflict_count,
+                        is_datetime=isinstance(excel_value, datetime),
+                        is_date=isinstance(excel_value, date) and not isinstance(excel_value, datetime)
+                    )
+                    worksheet.write(row_idx, col_idx, excel_value, style)
+        workbook.save(str(path))
+
     def _save_file(self, df: pd.DataFrame, file_path: str):
         path = Path(file_path)
         if path.suffix.lower() == '.csv':
             self._prepare_df_for_export(df).to_csv(path, index=False)
-        elif path.suffix.lower() in ['.xls', '.xlsx']:
-            engine = 'openpyxl' if path.suffix.lower() == '.xlsx' else 'xlwt'
+        elif path.suffix.lower() == '.xls':
+            if self.target_workbook is not None:
+                workbook_data = {
+                    sheet: self._prepare_df_for_export(sheet_df)
+                    for sheet, sheet_df in self.target_workbook.items()
+                }
+                workbook_data[self.target_sheet_name] = self._prepare_df_for_export(df)
+            else:
+                workbook_data = {"Sheet1": self._prepare_df_for_export(df)}
+            self._save_xls_workbook(workbook_data, path)
+        elif path.suffix.lower() == '.xlsx':
             if self.target_workbook is not None:
                 workbook = {
                     sheet: self._prepare_df_for_export(sheet_df)
                     for sheet, sheet_df in self.target_workbook.items()
                 }
                 workbook[self.target_sheet_name] = self._prepare_df_for_export(df)
-                with pd.ExcelWriter(path, engine=engine) as writer:
+                with pd.ExcelWriter(path, engine='openpyxl') as writer:
                     for sheet, sheet_df in workbook.items():
                         sheet_df.to_excel(writer, index=False, sheet_name=sheet)
             else:
-                self._prepare_df_for_export(df).to_excel(path, index=False, engine=engine)
+                self._prepare_df_for_export(df).to_excel(path, index=False, engine='openpyxl')
+            if self._highlight_conflict_cells_enabled(path):
+                self._apply_xlsx_conflict_highlights(path, df)
         else:
             raise ValueError(f"Unsupported file format: {path.suffix}")
 
@@ -200,13 +306,14 @@ class DataTransfer:
                 
             # Parse mappings
             valid_mappings = []
-            for src_key, tgt_key in source.mapping.items():
+            for src_key, tgt_key in source.mapping:
                 src_idx = self._col_to_index(src_key)
                 tgt_idx = self._col_to_index(tgt_key)
                 if src_idx < len(src_df.columns) and tgt_idx < len(out_df.columns):
                     valid_mappings.append({
                         'src_letter': self._index_to_col(src_idx),
                         'src_col': src_df.columns[src_idx],
+                        'tgt_idx': tgt_idx,
                         'tgt_col': out_df.columns[tgt_idx],
                         'tgt_letter': self._index_to_col(tgt_idx)
                     })
@@ -263,6 +370,7 @@ class DataTransfer:
                             if self._values_are_equivalent(old_val, prepared_new_val):
                                 action_taken = "identical_skipped"
                             else:
+                                self._record_conflict_cell(target_idx, mapping['tgt_idx'])
                                 resolution = self.config.conflict_resolution
                                 if resolution == 'manual':
                                     resolution = self._interactive_resolve(old_val, new_val, source.file_path, self.config.target_file, ref_val)
@@ -273,25 +381,27 @@ class DataTransfer:
                                     out_df.at[target_idx, tgt_col] = prepared_new_val
                                     action_taken = "conflict_overwritten"
                         
-                        if action_taken != "identical_skipped":
-                            self.report.append({
-                                "conflict_resolution": action_taken,
-                                "source_file": source.file_path,
-                                "source_sheet": source_sheet_name,
-                                "source_column": mapping['src_letter'],
-                                "source_headers": self._display_header(src_col),
-                                "target_file": self.config.target_file,
-                                "target_sheet": self.target_sheet_name,
-                                "target_column": mapping['tgt_letter'],
-                                "target_headers": self._display_header(tgt_col),
-                                "reference_value": ref_val,
-                                "original_data": old_val if not pd.isna(old_val) else None,
-                                "new_data": prepared_new_val,
-                                "similarity_score": similarity
-                            })
+                        self.report.append({
+                            "conflict_resolution": action_taken,
+                            "source_file": source.file_path,
+                            "source_sheet": source_sheet_name,
+                            "source_column": mapping['src_letter'],
+                            "source_headers": self._display_header(src_col),
+                            "target_file": self.config.target_file,
+                            "target_sheet": self.target_sheet_name,
+                            "target_column": mapping['tgt_letter'],
+                            "target_headers": self._display_header(tgt_col),
+                            "reference_value": ref_val,
+                            "original_data": old_val if not pd.isna(old_val) else None,
+                            "new_data": prepared_new_val,
+                            "similarity_score": similarity
+                        })
 
         self._save_file(out_df, self.config.output_file)
-        self._generate_report()
+        if self.config.generate_transfer_report:
+            self._generate_report()
+        if self.config.generate_reference_report:
+            self._generate_reference_report()
 
     def _generate_report(self):
         report_df = pd.DataFrame(self.report)
@@ -301,3 +411,29 @@ class DataTransfer:
             print(f"Report generated successfully: {report_path}")
         else:
             print("No transfers or conflicts to report.")
+
+    def _generate_reference_report(self):
+        reference_report_path = Path("reference_report.md")
+        grouped_references = {}
+        for row in self.report:
+            if row["conflict_resolution"] == "skipped_not_in_target":
+                continue
+            source_file = row["source_file"]
+            if source_file not in grouped_references:
+                grouped_references[source_file] = []
+            if row["reference_value"] not in grouped_references[source_file]:
+                grouped_references[source_file].append(row["reference_value"])
+
+        if not grouped_references:
+            print("No non-skipped reference values to report.")
+            return
+
+        lines = ["# Reference Report", ""]
+        for source_file, reference_values in grouped_references.items():
+            lines.append(f"## {source_file}")
+            lines.append("")
+            for reference_value in reference_values:
+                lines.append(f"- {reference_value}")
+            lines.append("")
+        reference_report_path.write_text("\n".join(lines), encoding="utf-8")
+        print(f"Reference report generated successfully: {reference_report_path}")

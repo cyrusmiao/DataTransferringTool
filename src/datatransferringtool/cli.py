@@ -66,7 +66,10 @@ def run(
         
         console.print(f"[bold green]Data transfer completed successfully![/bold green]")
         console.print(f"Output file: {config.output_file}")
-        console.print("Report file: transfer_report.xlsx")
+        if config.generate_transfer_report:
+            console.print("Report file: transfer_report.xlsx")
+        if config.generate_reference_report:
+            console.print("Reference report file: reference_report.md")
         
     except Exception as e:
         console.print(f"[bold red]An error occurred during transfer:[/bold red] {e}")
