@@ -1,5 +1,6 @@
 import pandas as pd
 from pathlib import Path
+from decimal import Decimal, InvalidOperation
 from thefuzz import fuzz
 from typing import List, Dict, Any
 from .config import TransferConfig
@@ -96,23 +97,47 @@ class DataTransfer:
                 df[column] = df[column].astype('object')
         return value
 
+    def _normalize_comparison_value(self, value):
+        if pd.isna(value):
+            return None
+        if isinstance(value, str):
+            value = value.strip()
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            return value
+
+    def _values_are_equivalent(self, old_val, new_val) -> bool:
+        return self._normalize_comparison_value(old_val) == self._normalize_comparison_value(new_val)
+
+    def _display_header(self, header):
+        header_text = str(header)
+        if header_text.startswith("Unnamed:"):
+            return ""
+        return header
+
+    def _prepare_df_for_export(self, df: pd.DataFrame) -> pd.DataFrame:
+        export_df = df.copy()
+        export_df.columns = [self._display_header(column) for column in export_df.columns]
+        return export_df
+
     def _save_file(self, df: pd.DataFrame, file_path: str):
         path = Path(file_path)
         if path.suffix.lower() == '.csv':
-            df.to_csv(path, index=False)
+            self._prepare_df_for_export(df).to_csv(path, index=False)
         elif path.suffix.lower() in ['.xls', '.xlsx']:
             engine = 'openpyxl' if path.suffix.lower() == '.xlsx' else 'xlwt'
             if self.target_workbook is not None:
                 workbook = {
-                    sheet: sheet_df.copy()
+                    sheet: self._prepare_df_for_export(sheet_df)
                     for sheet, sheet_df in self.target_workbook.items()
                 }
-                workbook[self.target_sheet_name] = df
+                workbook[self.target_sheet_name] = self._prepare_df_for_export(df)
                 with pd.ExcelWriter(path, engine=engine) as writer:
                     for sheet, sheet_df in workbook.items():
                         sheet_df.to_excel(writer, index=False, sheet_name=sheet)
             else:
-                df.to_excel(path, index=False, engine=engine)
+                self._prepare_df_for_export(df).to_excel(path, index=False, engine=engine)
         else:
             raise ValueError(f"Unsupported file format: {path.suffix}")
 
@@ -199,11 +224,11 @@ class DataTransfer:
                         "source_file": source.file_path,
                         "source_sheet": source_sheet_name,
                         "source_column": self._index_to_col(ref_src_idx),
-                        "source_headers": ref_col_src,
+                        "source_headers": self._display_header(ref_col_src),
                         "target_file": self.config.target_file,
                         "target_sheet": self.target_sheet_name,
                         "target_column": self._index_to_col(ref_tgt_idx),
-                        "target_headers": ref_col_tgt,
+                        "target_headers": self._display_header(ref_col_tgt),
                         "reference_value": ref_val,
                         "original_data": None,
                         "new_data": None,
@@ -235,7 +260,7 @@ class DataTransfer:
                             # Both have values, calculate similarity
                             similarity = fuzz.ratio(str(old_val), str(prepared_new_val))
                             
-                            if str(old_val) == str(prepared_new_val):
+                            if self._values_are_equivalent(old_val, prepared_new_val):
                                 action_taken = "identical_skipped"
                             else:
                                 resolution = self.config.conflict_resolution
@@ -254,11 +279,11 @@ class DataTransfer:
                                 "source_file": source.file_path,
                                 "source_sheet": source_sheet_name,
                                 "source_column": mapping['src_letter'],
-                                "source_headers": src_col,
+                                "source_headers": self._display_header(src_col),
                                 "target_file": self.config.target_file,
                                 "target_sheet": self.target_sheet_name,
                                 "target_column": mapping['tgt_letter'],
-                                "target_headers": tgt_col,
+                                "target_headers": self._display_header(tgt_col),
                                 "reference_value": ref_val,
                                 "original_data": old_val if not pd.isna(old_val) else None,
                                 "new_data": prepared_new_val,
