@@ -31,6 +31,9 @@ The data transfer rules are defined in a YAML file. Here is an example:
 # Target file path (supports csv, xls, xlsx)
 target_file: "target.xlsx"
 
+# If the target file is Excel, you can choose the sheet name or a 0-based sheet index
+target_sheet: "Summary"
+
 # The output file where the merged data will be saved
 output_file: "output.xlsx"
 
@@ -57,11 +60,17 @@ sources:
       E: F
 
   - file_path: "source2.xlsx"
+    # If the source file is Excel, you can choose the sheet name or a 0-based sheet index
+    sheet_name: "RawData"
     reference_column:
       A: B
     mapping:
       C: D
 ```
+
+- If `target_sheet` or `sheet_name` is omitted, the first Excel sheet is used.
+- When the target file is Excel, the output keeps the other sheets from the target workbook and only updates the selected target sheet.
+- If the source and target are the same Excel file, you can transfer data across different tabs by using different `sheet_name` and `target_sheet` values.
 
 ## Usage
 
@@ -117,6 +126,7 @@ Once the build is complete, you will find the executable file inside the `dist/`
 After execution, the tool generates a `transfer_report.xlsx` containing:
 - Conflict resolution method used (e.g., `transferred`, `conflict_kept_original`, `conflict_overwritten`, `skipped_not_in_target`).
 - Source and Target file paths.
+- Source and Target sheet names.
 - Reference values used to match the rows.
 - The columns affected.
 - Original data vs New Data.

@@ -8,7 +8,9 @@ class DataTransfer:
     def __init__(self, config: TransferConfig):
         self.config = config
         self.report = []
-        self.target_df = self._load_file(config.target_file)
+        self.target_workbook = None
+        self.target_sheet_name = None
+        self.target_df = self._load_target_file()
         
     def _col_to_index(self, col) -> int:
         if isinstance(col, int):
@@ -22,24 +24,71 @@ class DataTransfer:
                 num = num * 26 + (ord(c) - ord('A')) + 1
         return num - 1
         
-    def _load_file(self, file_path: str) -> pd.DataFrame:
+    def _resolve_sheet_name(self, workbook: dict[str, pd.DataFrame], sheet_name: str | int | None) -> str:
+        sheet_names = list(workbook.keys())
+        if not sheet_names:
+            raise ValueError("Excel file does not contain any sheets.")
+        if sheet_name is None:
+            return sheet_names[0]
+        if isinstance(sheet_name, int):
+            if sheet_name < 0 or sheet_name >= len(sheet_names):
+                raise ValueError(f"Sheet index '{sheet_name}' is out of bounds.")
+            return sheet_names[sheet_name]
+        if sheet_name not in workbook:
+            raise ValueError(f"Sheet '{sheet_name}' not found in Excel file.")
+        return sheet_name
+
+    def _load_workbook(self, file_path: str) -> dict[str, pd.DataFrame]:
+        return pd.read_excel(Path(file_path), sheet_name=None)
+
+    def _load_target_file(self) -> pd.DataFrame:
+        path = Path(self.config.target_file)
+        if path.suffix.lower() in ['.xls', '.xlsx']:
+            self.target_workbook = self._load_workbook(self.config.target_file)
+            self.target_sheet_name = self._resolve_sheet_name(self.target_workbook, self.config.target_sheet)
+            return self.target_workbook[self.target_sheet_name].copy()
+        return self._load_file(self.config.target_file)
+
+    def _load_file(self, file_path: str, sheet_name: str | int | None = None) -> pd.DataFrame:
         path = Path(file_path)
         if path.suffix.lower() == '.csv':
             return pd.read_csv(path)
         elif path.suffix.lower() in ['.xls', '.xlsx']:
-            return pd.read_excel(path)
+            if sheet_name is None:
+                return pd.read_excel(path)
+            return pd.read_excel(path, sheet_name=sheet_name)
         else:
             raise ValueError(f"Unsupported file format: {path.suffix}")
+
+    def _prepare_value_for_target(self, df: pd.DataFrame, column: str, value):
+        if pd.isna(value):
+            return value
+        if pd.api.types.is_string_dtype(df[column].dtype):
+            return str(value)
+        if pd.api.types.is_numeric_dtype(df[column].dtype):
+            try:
+                return pd.to_numeric([value], errors='raise')[0]
+            except (TypeError, ValueError):
+                df[column] = df[column].astype('object')
+        return value
 
     def _save_file(self, df: pd.DataFrame, file_path: str):
         path = Path(file_path)
         if path.suffix.lower() == '.csv':
             df.to_csv(path, index=False)
         elif path.suffix.lower() in ['.xls', '.xlsx']:
-            # For .xls it's generally better to output as .xlsx if possible, 
-            # but pandas to_excel supports xlsx via openpyxl and xls via xlwt (deprecated).
             engine = 'openpyxl' if path.suffix.lower() == '.xlsx' else 'xlwt'
-            df.to_excel(path, index=False, engine=engine)
+            if self.target_workbook is not None:
+                workbook = {
+                    sheet: sheet_df.copy()
+                    for sheet, sheet_df in self.target_workbook.items()
+                }
+                workbook[self.target_sheet_name] = df
+                with pd.ExcelWriter(path, engine=engine) as writer:
+                    for sheet, sheet_df in workbook.items():
+                        sheet_df.to_excel(writer, index=False, sheet_name=sheet)
+            else:
+                df.to_excel(path, index=False, engine=engine)
         else:
             raise ValueError(f"Unsupported file format: {path.suffix}")
 
@@ -67,7 +116,7 @@ class DataTransfer:
         
         for source_idx, source in enumerate(self.config.sources):
             try:
-                src_df = self._load_file(source.file_path)
+                src_df = self._load_file(source.file_path, source.sheet_name)
             except Exception as e:
                 print(f"Error loading source file {source.file_path}: {e}")
                 continue
@@ -123,7 +172,9 @@ class DataTransfer:
                     self.report.append({
                         "conflict_resolution": "skipped_not_in_target",
                         "source_file": source.file_path,
+                        "source_sheet": source.sheet_name,
                         "target_file": self.config.target_file,
+                        "target_sheet": self.target_sheet_name,
                         "reference_value": ref_val,
                         "target_column": None,
                         "original_data": None,
@@ -144,17 +195,19 @@ class DataTransfer:
                         
                         if pd.isna(new_val):
                             continue # Nothing to transfer
+
+                        prepared_new_val = self._prepare_value_for_target(out_df, tgt_col, new_val)
                         
                         action_taken = "transferred"
                         similarity = 0.0
                         
                         if pd.isna(old_val):
-                            out_df.at[target_idx, tgt_col] = new_val
+                            out_df.at[target_idx, tgt_col] = prepared_new_val
                         else:
                             # Both have values, calculate similarity
-                            similarity = fuzz.ratio(str(old_val), str(new_val))
+                            similarity = fuzz.ratio(str(old_val), str(prepared_new_val))
                             
-                            if str(old_val) == str(new_val):
+                            if str(old_val) == str(prepared_new_val):
                                 action_taken = "identical_skipped"
                             else:
                                 resolution = self.config.conflict_resolution
@@ -164,18 +217,20 @@ class DataTransfer:
                                 if resolution == 'keep_original':
                                     action_taken = "conflict_kept_original"
                                 elif resolution == 'overwrite':
-                                    out_df.at[target_idx, tgt_col] = new_val
+                                    out_df.at[target_idx, tgt_col] = prepared_new_val
                                     action_taken = "conflict_overwritten"
                         
                         if action_taken != "identical_skipped":
                             self.report.append({
                                 "conflict_resolution": action_taken,
                                 "source_file": source.file_path,
+                                "source_sheet": source.sheet_name,
                                 "target_file": self.config.target_file,
+                                "target_sheet": self.target_sheet_name,
                                 "reference_value": ref_val,
                                 "target_column": mapping['tgt_letter'],
                                 "original_data": old_val if not pd.isna(old_val) else None,
-                                "new_data": new_val,
+                                "new_data": prepared_new_val,
                                 "similarity_score": similarity
                             })
 
