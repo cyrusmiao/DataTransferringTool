@@ -23,6 +23,16 @@ class DataTransfer:
             if c.isalpha():
                 num = num * 26 + (ord(c) - ord('A')) + 1
         return num - 1
+
+    def _index_to_col(self, index: int) -> str:
+        if index < 0:
+            raise ValueError("Column index must be non-negative.")
+        label = ""
+        index += 1
+        while index > 0:
+            index, remainder = divmod(index - 1, 26)
+            label = chr(ord('A') + remainder) + label
+        return label
         
     def _resolve_sheet_name(self, workbook: dict[str, pd.DataFrame], sheet_name: str | int | None) -> str:
         sheet_names = list(workbook.keys())
@@ -34,12 +44,26 @@ class DataTransfer:
             if sheet_name < 0 or sheet_name >= len(sheet_names):
                 raise ValueError(f"Sheet index '{sheet_name}' is out of bounds.")
             return sheet_names[sheet_name]
-        if sheet_name not in workbook:
-            raise ValueError(f"Sheet '{sheet_name}' not found in Excel file.")
-        return sheet_name
+        normalized_sheet_name = str(sheet_name).strip()
+        for actual_sheet_name in sheet_names:
+            if actual_sheet_name == sheet_name:
+                return actual_sheet_name
+            if str(actual_sheet_name).strip() == normalized_sheet_name:
+                return actual_sheet_name
+        raise ValueError(f"Sheet '{sheet_name}' not found in Excel file.")
 
     def _load_workbook(self, file_path: str) -> dict[str, pd.DataFrame]:
         return pd.read_excel(Path(file_path), sheet_name=None)
+
+    def _load_sheet_file(self, file_path: str, sheet_name: str | int | None = None) -> tuple[pd.DataFrame, str | None]:
+        path = Path(file_path)
+        if path.suffix.lower() == '.csv':
+            return pd.read_csv(path), None
+        if path.suffix.lower() in ['.xls', '.xlsx']:
+            workbook = self._load_workbook(file_path)
+            resolved_sheet_name = self._resolve_sheet_name(workbook, sheet_name)
+            return workbook[resolved_sheet_name].copy(), resolved_sheet_name
+        raise ValueError(f"Unsupported file format: {path.suffix}")
 
     def _load_target_file(self) -> pd.DataFrame:
         path = Path(self.config.target_file)
@@ -116,7 +140,7 @@ class DataTransfer:
         
         for source_idx, source in enumerate(self.config.sources):
             try:
-                src_df = self._load_file(source.file_path, source.sheet_name)
+                src_df, source_sheet_name = self._load_sheet_file(source.file_path, source.sheet_name)
             except Exception as e:
                 print(f"Error loading source file {source.file_path}: {e}")
                 continue
@@ -156,9 +180,10 @@ class DataTransfer:
                 tgt_idx = self._col_to_index(tgt_key)
                 if src_idx < len(src_df.columns) and tgt_idx < len(out_df.columns):
                     valid_mappings.append({
+                        'src_letter': self._index_to_col(src_idx),
                         'src_col': src_df.columns[src_idx],
                         'tgt_col': out_df.columns[tgt_idx],
-                        'tgt_letter': tgt_key
+                        'tgt_letter': self._index_to_col(tgt_idx)
                     })
 
             for src_idx, src_row in src_df.iterrows():
@@ -172,11 +197,14 @@ class DataTransfer:
                     self.report.append({
                         "conflict_resolution": "skipped_not_in_target",
                         "source_file": source.file_path,
-                        "source_sheet": source.sheet_name,
+                        "source_sheet": source_sheet_name,
+                        "source_column": self._index_to_col(ref_src_idx),
+                        "source_headers": ref_col_src,
                         "target_file": self.config.target_file,
                         "target_sheet": self.target_sheet_name,
+                        "target_column": self._index_to_col(ref_tgt_idx),
+                        "target_headers": ref_col_tgt,
                         "reference_value": ref_val,
-                        "target_column": None,
                         "original_data": None,
                         "new_data": None,
                         "similarity_score": None
@@ -224,11 +252,14 @@ class DataTransfer:
                             self.report.append({
                                 "conflict_resolution": action_taken,
                                 "source_file": source.file_path,
-                                "source_sheet": source.sheet_name,
+                                "source_sheet": source_sheet_name,
+                                "source_column": mapping['src_letter'],
+                                "source_headers": src_col,
                                 "target_file": self.config.target_file,
                                 "target_sheet": self.target_sheet_name,
-                                "reference_value": ref_val,
                                 "target_column": mapping['tgt_letter'],
+                                "target_headers": tgt_col,
+                                "reference_value": ref_val,
                                 "original_data": old_val if not pd.isna(old_val) else None,
                                 "new_data": prepared_new_val,
                                 "similarity_score": similarity
