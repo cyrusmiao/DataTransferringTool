@@ -1,0 +1,50 @@
+# 目标文件路径 (支持 csv, xls, xlsx)
+target_file: "../既往数据代码导入-ATG+PTCY.xlsx"
+
+# 若目标文件是 Excel，可指定要写入的工作表名或从 0 开始的 sheet 索引
+# target_sheet: "Sheet1"
+
+# 最终生成的新文件路径（不会修改原文件）
+output_file: "output.xlsx"
+
+# 冲突处理策略（当目标单元格已有数据时如何处理）
+# 选项: 
+#   - keep_original: 优先保留目标文件中已有的（或最先被写入的）数据
+#   - overwrite: 后续写入的数据直接覆盖之前的数据
+#   - manual: 命令行中进行交互式手动确认
+conflict_resolution: "keep_original"
+
+# 来源文件列表
+sources:
+  - file_path: "../参考数据库/407例完整数据20250527/基本信息 NEW.xlsx"
+    # 若来源文件是 Excel，可指定要读取的工作表名或从 0 开始的 sheet 索引
+    # sheet_name: "Sheet1"
+    # 行与行之间寻找对应关系的参照列
+    # 例如：将源文件的 A 列与目标文件的 C 列作为匹配条件
+    reference_column:
+      B: B
+    
+    # 需要迁移的数据列对应关系
+    # 将源文件 B 列的数据写入目标文件 D 列
+    # 将源文件 E 列的数据写入目标文件 F 列
+    mapping:
+      H: D
+      I: E
+      J: G
+      K: S
+      L: AG
+      M: AH
+      N: X
+      O: W
+      P: Y
+      Q: Z
+      R: V
+      S: AE
+      T: AO
+      U: AP
+      V: AQ
+      W: AK
+      X: AJ
+      Z: AF
+      AA: T
+      AB: AB
