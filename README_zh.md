@@ -60,24 +60,18 @@ sources:
       E: F
 
   - file_path: "source2.xlsx"
-<<<<<<< HEAD
-=======
     # 若来源文件是 Excel，可指定要读取的工作表名或从 0 开始的 sheet 索引
     sheet_name: "原始数据"
->>>>>>> master
     reference_column:
       A: B
     mapping:
       C: D
 ```
 
-<<<<<<< HEAD
-=======
 - 未配置 `target_sheet` 或 `sheet_name` 时，Excel 默认使用第一个工作表。
 - 当目标文件是 Excel 时，输出文件会保留目标工作簿中的其他工作表，只更新指定的目标工作表。
 - 如果来源文件与目标文件是同一个 Excel，也可以通过不同的 `sheet_name` / `target_sheet` 在不同 tab 之间迁移数据。
 
->>>>>>> master
 ## 使用方法
 
 ### 命令行模式 (CLI)
@@ -109,10 +103,7 @@ uv run python main.py --third-party-notices
 执行完成后，工具会自动在当前目录下生成一份名为 `transfer_report.xlsx` 的 Excel 报告。报告包含了以下重要信息：
 - 冲突处理结果（例如：`transferred` 已转移, `conflict_kept_original` 冲突-保留原数据, `conflict_overwritten` 冲突-覆盖, `skipped_not_in_target` 找不到对应行被跳过）。
 - 涉及的源文件和目标文件路径。
-<<<<<<< HEAD
-=======
 - 涉及的源工作表和目标工作表。
->>>>>>> master
 - 被匹配到的参照值。
 - 操作的具体目标列。
 - 原数据和新数据的对比。
